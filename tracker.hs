@@ -1,4 +1,3 @@
-
 import Network.Info
 import Network.Socket
 import Control.Concurrent
@@ -9,9 +8,15 @@ import Control.Monad.State
 
 import Data.Map as M
 
-type ListM a = StateT [String] IO a
+type ListM a = StateT Env IO a
 
-getIpEth0 (n:ns) = if ((name n) == "eh0")
+data Env = Env {
+		connectedPeers :: [String]
+		,files :: (String,[String])
+		} deriving (Show)
+
+
+getIpEth0 (n:ns) = if ((name n) == "wlan0")
                           then show (ipv4 n)
                           else getIpEth0 ns
 
@@ -38,12 +43,13 @@ main = do
 acceptLoop :: Socket -> IO ()
 acceptLoop sock = do
 			fromCli <- newEmptyMVar
-			updatedList <- newEmptyMVar
-			maintainEnvTid <- (forkIO (maintainEnv fromCli updatedList))
+			updatedEnv <- newEmptyMVar
+			maintainEnvTid <- (forkIO (maintainEnv fromCli updatedEnv))
+			--checkPeersTid <- (forkIO (checkPeers updatedEnv))
 			listen sock 2
 			forever (do
 					accepted_sock <- accept sock 
-					forkIO (worker accepted_sock fromCli )
+					forkIO (worker accepted_sock fromCli)
 				)
 
 worker :: (Socket,SockAddr) -> MVar String -> IO ()
@@ -57,31 +63,43 @@ worker (sock, (SockAddrInet pn ha) ) m =
 		sClose sock
 		putMVar m (ha_1 ++ ":" ++ show(pn))
 
-maintainEnv :: MVar String -> MVar String ->IO ()
+
+------------------------------------------------------------------------
+
+
+------------------------------------------------------------------------
+
+maintainEnv :: MVar String -> MVar Env ->IO ()
 maintainEnv m u = runListM (updateListLoop m u)
 
-updateListLoop :: MVar String -> MVar String -> ListM ()
+updateListLoop :: MVar String -> MVar Env -> ListM ()
 updateListLoop m u = do 
-			v <- doIO (takeMVar m)
-			x <- updateList v
+			s <- doIO (takeMVar m)
+			x <- (updateList s u)
 			updateListLoop m u
 			
 
-updateList :: String -> ListM ()
-updateList a = do
+updateList :: String ->MVar Env-> ListM ()
+updateList a mvarUpdatedEnv = do 
 		x <- get
-		put (a:x)
-		doIO (print (a:x))
+		put (updatedEnv x)
+		doIO (print (updatedEnv x))
+		doIO ( forkIO (do  v <- tryTakeMVar mvarUpdatedEnv
+				   putMVar mvarUpdatedEnv (updatedEnv x)))
 		return ()
+		
+		where updatedEnv s = (Env {connectedPeers = (a:(connectedPeers s)), files = (files s)} )
 
 
 --ListM a = StateT [String] IO a	
 
 runListM :: ListM a -> IO a
-runListM l = evalStateT l []
+runListM l = evalStateT l emptyEnv
+
+emptyEnv = Env {connectedPeers = [], files = ("Hey",["12","23"])}
 
 doIO :: IO a-> ListM a
-doIO = lift
+doIO = lift 
 
 --printList :: ListM a -> IO ()
  
