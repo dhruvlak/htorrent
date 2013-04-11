@@ -9,9 +9,9 @@ import Control.Monad.State
 
 import Data.Map as M
 
---type Env = [String]
+type ListM a = StateT [String] IO a
 
-getIpEth0 (n:ns) = if ((name n) == "eth0")
+getIpEth0 (n:ns) = if ((name n) == "eh0")
                           then show (ipv4 n)
                           else getIpEth0 ns
 
@@ -35,8 +35,6 @@ main = do
 
 	--putStr haddr
 
-
-
 acceptLoop :: Socket -> IO ()
 acceptLoop sock = do
 			fromCli <- newEmptyMVar
@@ -45,7 +43,7 @@ acceptLoop sock = do
 			listen sock 2
 			forever (do
 					accepted_sock <- accept sock 
-					forkIO (worker accepted_sock fromCli updatedList)
+					forkIO (worker accepted_sock fromCli )
 				)
 
 worker :: (Socket,SockAddr) -> MVar String -> IO ()
@@ -57,22 +55,27 @@ worker (sock, (SockAddrInet pn ha) ) m =
 		--hand <- socketToHandle sock ReadWriteMode
 		--hSetBuffering hand LineBuffering
 		sClose sock
-		putMVar m ha_1 
+		putMVar m (ha_1 ++ ":" ++ show(pn))
 
-maintainEnv :: MVar String ->IO ()
+maintainEnv :: MVar String -> MVar String ->IO ()
 maintainEnv m u = runListM (updateListLoop m u)
 
 updateListLoop :: MVar String -> MVar String -> ListM ()
 updateListLoop m u = do 
 			v <- doIO (takeMVar m)
-			updateList v
-			maintainEnv m u
+			x <- updateList v
+			updateListLoop m u
+			
 
-updateList :: CalcM ()	
-updateList = StateT  
+updateList :: String -> ListM ()
+updateList a = do
+		x <- get
+		put (a:x)
+		doIO (print (a:x))
+		return ()
 
 
-ListM a = StateT [String] IO a	
+--ListM a = StateT [String] IO a	
 
 runListM :: ListM a -> IO a
 runListM l = evalStateT l []
@@ -80,4 +83,5 @@ runListM l = evalStateT l []
 doIO :: IO a-> ListM a
 doIO = lift
 
-
+--printList :: ListM a -> IO ()
+ 
