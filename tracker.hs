@@ -11,7 +11,7 @@ import Data.Map as M
 
 --type Env = [String]
 
-getIpEth0 (n:ns) = if ((name n) == "eh0")
+getIpEth0 (n:ns) = if ((name n) == "eth0")
                           then show (ipv4 n)
                           else getIpEth0 ns
 
@@ -39,12 +39,13 @@ main = do
 
 acceptLoop :: Socket -> IO ()
 acceptLoop sock = do
-			m <- newEmptyMVar
-			maintainEnvTid <- (forkIO (maintainEnv m))
+			fromCli <- newEmptyMVar
+			updatedList <- newEmptyMVar
+			maintainEnvTid <- (forkIO (maintainEnv fromCli updatedList))
 			listen sock 2
 			forever (do
 					accepted_sock <- accept sock 
-					forkIO (worker accepted_sock m)
+					forkIO (worker accepted_sock fromCli updatedList)
 				)
 
 worker :: (Socket,SockAddr) -> MVar String -> IO ()
@@ -59,9 +60,24 @@ worker (sock, (SockAddrInet pn ha) ) m =
 		putMVar m ha_1 
 
 maintainEnv :: MVar String ->IO ()
-maintainEnv m =	do 
-			v <- takeMVar m
-			putStrLn ("received" ++ show v)
-			maintainEnv m	
+maintainEnv m u = runListM (updateListLoop m u)
 
-	
+updateListLoop :: MVar String -> MVar String -> ListM ()
+updateListLoop m u = do 
+			v <- doIO (takeMVar m)
+			updateList v
+			maintainEnv m u
+
+updateList :: CalcM ()	
+updateList = StateT  
+
+
+ListM a = StateT [String] IO a	
+
+runListM :: ListM a -> IO a
+runListM l = evalStateT l []
+
+doIO :: IO a-> ListM a
+doIO = lift
+
+
