@@ -102,4 +102,4 @@ doIO :: IO a-> ListM a
 doIO = lift 
 
 --printList :: ListM a -> IO ()
- 
+--printLIs
