@@ -47,8 +47,9 @@ acceptLoop sock = do
 			mvarSeeder <- newEmptyMVar
 			mvarEnv <- newEmptyMVar
 			maintainEnvTid <- (forkIO (maintainEnv mvarFile mvarSeeder mvarEnv))
-			--checkPeersTid <- (forkIO (checkPeers updatedEnv))
+			--checkPreetKhaliHit
 			listen sock 2
+
 			forever (do
 					accepted_sock <- accept sock 
 					forkIO (worker sock accepted_sock mvarFile mvarSeeder mvarEnv)
@@ -69,7 +70,7 @@ worker serverSock (clientSock, (SockAddrInet pn ha) ) mvarFile mvarSeeder mvarEn
 		--takeMVar u
 		--tryTakeMVar u
 			newEnv <- takeMVar mvarEnv
-			sendNum <- send clientSock ((show (newEnv)) ++ "$")
+			sendNum <- send clientSock ((show (files newEnv)) ++ "$")
 		--send sock "$#finish#$"
 			sClose clientSock
 			print ("send:"++ show (sendNum))
@@ -82,7 +83,6 @@ worker serverSock (clientSock, (SockAddrInet pn ha) ) mvarFile mvarSeeder mvarEn
 			sClose clientSock
 
 ------------------------------------------------------------------------
-
 
 
 ------------------------------------------------------------------------
