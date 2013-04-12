@@ -35,8 +35,16 @@ interpret s = if s == "connect" then
 connectToTracker::IO ()
 connectToTracker = do
 		--putStrLn s 
-		haddr <- inet_addr tracker_ip
+		trackerAddr <- inet_addr tracker_ip
 		client_sock <- socket AF_INET Stream defaultProtocol
-		connect client_sock (SockAddrInet tracker_port haddr)
+		connect client_sock (SockAddrInet tracker_port trackerAddr)
+		getEnv client_sock "Env:"
 
-
+getEnv :: Socket -> String -> IO ()
+getEnv clientSock msgReceived = do
+					m <- (recv clientSock 1024)
+					print m
+					if (m == "$#finish#$") then
+						print msgReceived
+					else getEnv clientSock (msgReceived++ m) 
+					

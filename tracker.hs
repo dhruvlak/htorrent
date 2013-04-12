@@ -16,7 +16,7 @@ data Env = Env {
 		} deriving (Show)
 
 
-getIpEth0 (n:ns) = if ((name n) == "wlan0")
+getIpEth0 (n:ns) = if ((name n) == "en0")
                           then show (ipv4 n)
                           else getIpEth0 ns
 
@@ -43,27 +43,30 @@ main = do
 acceptLoop :: Socket -> IO ()
 acceptLoop sock = do
 			fromCli <- newEmptyMVar
-			updatedEnv <- newEmptyMVar
-			maintainEnvTid <- (forkIO (maintainEnv fromCli updatedEnv))
+			mvarEnv <- newEmptyMVar
+			maintainEnvTid <- (forkIO (maintainEnv fromCli mvarEnv))
 			--checkPeersTid <- (forkIO (checkPeers updatedEnv))
 			listen sock 2
 			forever (do
 					accepted_sock <- accept sock 
-					forkIO (worker accepted_sock fromCli)
+					forkIO (worker accepted_sock fromCli mvarEnv)
 				)
 
-worker :: (Socket,SockAddr) -> MVar String -> IO ()
-worker (sock, (SockAddrInet pn ha) ) m = 
+worker :: (Socket,SockAddr) -> MVar String ->MVar Env -> IO ()
+worker (sock, (SockAddrInet pn ha) ) m u = 
 	do
 		ha_1 <- inet_ntoa ha
-		--runStateT (updateEnv ha_1) >>= putStr . fst
-		--runEnv (updateEnv ha_1)		
-		--hand <- socketToHandle sock ReadWriteMode
-		--hSetBuffering hand LineBuffering
-		sClose sock
+		print ha_1
+		--sClose sock
+		tryTakeMVar u
 		putMVar m (ha_1 ++ ":" ++ show(pn))
-
-
+		--takeMVar u
+		--tryTakeMVar u
+		newEnv <- takeMVar u
+		sendNum <- send sock (show (newEnv))
+		send sock "$#finish#$"
+		sClose sock
+		print ("send:"++ show (sendNum))
 ------------------------------------------------------------------------
 
 
@@ -80,15 +83,15 @@ updateListLoop m u = do
 			
 
 updateList :: String ->MVar Env-> ListM ()
-updateList a mvarUpdatedEnv = do 
+updateList a mvarEnv = do 
 		x <- get
-		put (updatedEnv x)
-		doIO (print (updatedEnv x))
-		doIO ( forkIO (do  v <- tryTakeMVar mvarUpdatedEnv
-				   putMVar mvarUpdatedEnv (updatedEnv x)))
+		put (modifiedEnv x)
+		doIO (print (modifiedEnv x))
+		doIO ( forkIO (do  v <- tryTakeMVar mvarEnv
+				   putMVar mvarEnv (modifiedEnv x)))
 		return ()
 		
-		where updatedEnv s = (Env {connectedPeers = (a:(connectedPeers s)), files = (files s)} )
+		where modifiedEnv s = (Env {connectedPeers = (a:(connectedPeers s)), files = (files s)} )
 
 
 --ListM a = StateT [String] IO a	
@@ -101,5 +104,5 @@ emptyEnv = Env {connectedPeers = [], files = ("Hey",["12","23"])}
 doIO :: IO a-> ListM a
 doIO = lift 
 
---printList :: ListM a -> IO ()
+--printList :: ListM a -> IO (		)
 
