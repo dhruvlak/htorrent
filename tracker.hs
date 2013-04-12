@@ -29,45 +29,57 @@ ipEth = do
 	inet_addr (getIpEth0 ni)
 	
 
-listen_port = 10116
+listenPort = 10116
+
 message = "hello, world"
 
 main = do 
 	sock  <- socket AF_INET Stream defaultProtocol
 	haddr <- ipEth
-	bindSocket sock (SockAddrInet listen_port haddr)
+	bindSocket sock (SockAddrInet listenPort haddr)
 	acceptLoop sock `finally` sClose sock
 
 	--putStr haddr
 
 acceptLoop :: Socket -> IO ()
 acceptLoop sock = do
-			fromCli <- newEmptyMVar
+			mvarFile <- newEmptyMVar
+			mvarSeeder <- newEmptyMVar
 			mvarEnv <- newEmptyMVar
-			maintainEnvTid <- (forkIO (maintainEnv fromCli mvarEnv))
+			maintainEnvTid <- (forkIO (maintainEnv mvarFile mvarSeeder mvarEnv))
 			--checkPeersTid <- (forkIO (checkPeers updatedEnv))
 			listen sock 2
 			forever (do
 					accepted_sock <- accept sock 
-					forkIO (worker accepted_sock fromCli mvarEnv)
+					forkIO (worker sock accepted_sock mvarFile mvarSeeder mvarEnv)
 				)
 
-worker :: (Socket,SockAddr) -> MVar String ->MVar Env -> IO ()
-worker (sock, (SockAddrInet pn ha) ) m u = 
+worker :: Socket -> (Socket,SockAddr) -> MVar String->MVar String ->MVar Env -> IO ()
+worker serverSock (clientSock, (SockAddrInet pn ha) ) mvarFile mvarSeeder mvarEnv = 
 	do
-		ha_1 <- inet_ntoa ha
-		print ha_1
+		clientIP <- inet_ntoa ha
+		--print ha_1
+		requestType <- (recv clientSock 100)
 		--sClose sock
-		tryTakeMVar u
-		putMVar m (ha_1 ++ ":" ++ show(pn))
+		if (requestType == "$getEnv$") then
+		   do	
+			tryTakeMVar mvarEnv
+			putMVar mvarFile ("")
+			putMVar mvarSeeder ("")
 		--takeMVar u
 		--tryTakeMVar u
-		newEnv <- takeMVar u
-		sendNum <- send sock ((show (newEnv)) ++ "$")
+			newEnv <- takeMVar mvarEnv
+			sendNum <- send clientSock ((show (newEnv)) ++ "$")
 		--send sock "$#finish#$"
-		sClose sock
-		print ("send:"++ show (sendNum))
-
+			sClose clientSock
+			print ("send:"++ show (sendNum))
+		else 
+		  do
+			tryTakeMVar mvarEnv
+			putMVar mvarFile requestType
+			putMVar mvarSeeder clientIP
+			print ("updating:")
+			sClose clientSock
 
 ------------------------------------------------------------------------
 
@@ -75,29 +87,44 @@ worker (sock, (SockAddrInet pn ha) ) m u =
 
 ------------------------------------------------------------------------
 
-maintainEnv :: MVar String -> MVar Env ->IO ()
-maintainEnv m u = runTrackerM (updateListLoop m u)
+maintainEnv :: MVar String -> MVar String-> MVar Env ->IO ()
+maintainEnv mvarFile mvarSeeder mvarEnv = runTrackerM (updateListLoop mvarFile mvarSeeder mvarEnv)
 
-updateListLoop :: MVar String -> MVar Env -> TrackerM ()
-updateListLoop m u = do 
-			s <- doIO (takeMVar m)
-			x <- (updateList s u)
-			updateListLoop m u
+updateListLoop :: MVar String-> MVar String -> MVar Env -> TrackerM ()
+updateListLoop mvarFile mvarSeeder mvarEnv = do 
+			fileName <- doIO (takeMVar mvarFile)
+			seeder <- doIO (takeMVar mvarSeeder)
+			x <- (updateList fileName seeder mvarEnv)
+			updateListLoop mvarFile mvarSeeder mvarEnv
 			
 
-updateList :: String ->MVar Env-> TrackerM ()
-updateList a mvarEnv = do 
-		x <- get
-		put (modifiedEnv x)
-		doIO (print (modifiedEnv x))
+updateList :: String -> String ->MVar Env-> TrackerM ()
+updateList fileName seeder mvarEnv = do 
+		env <- get
+		put (modifiedEnv env fileName seeder)
+		doIO (print (modifiedEnv env fileName seeder))
 		doIO ( forkIO (do  v <- tryTakeMVar mvarEnv
-				   putMVar mvarEnv (modifiedEnv x)))
+				   putMVar mvarEnv (modifiedEnv env fileName seeder)
+			      )
+		     )
 		return ()
 		
-		where modifiedEnv s = (Env {connectedPeers = (a:(connectedPeers s)), files = (files s)} )
+		where modifiedEnv env fileName seeder =  Env {connectedPeers = (connectedPeers env), files = (modifyFileList (files env) fileName seeder)} 
 
 
+modifyFileList::[(String,[String])] -> String -> String -> [(String,[String])]
+modifyFileList (x:xs) fileName seeder = if (fst x) == fileName then
+						((fileName,(addUnique seeder (snd x))):xs)
+					else (x:(modifyFileList xs fileName seeder))
+modifyFileList [] fileName seeder = [(fileName,[seeder])]
 --ListM a = StateT [String] IO a	
+
+addUnique :: String ->[String] -> [String]
+addUnique s (x:xs) = if (x==s) then (x:xs)
+			else
+				(x:(addUnique s xs))
+addUnique s [] = [s]
+
 
 runTrackerM :: TrackerM a -> IO a
 runTrackerM l = evalStateT l emptyEnv
