@@ -8,11 +8,11 @@ import Control.Monad.State
 
 import Data.Map as M
 
-type ListM a = StateT Env IO a
+type TrackerM a = StateT Env IO a
 
 data Env = Env {
 		connectedPeers :: [String]
-		,files :: (String,[String])
+		,files :: [(String,[String])]
 		} deriving (Show)
 
 
@@ -63,26 +63,29 @@ worker (sock, (SockAddrInet pn ha) ) m u =
 		--takeMVar u
 		--tryTakeMVar u
 		newEnv <- takeMVar u
-		sendNum <- send sock (show (newEnv))
-		send sock "$#finish#$"
+		sendNum <- send sock ((show (newEnv)) ++ "$")
+		--send sock "$#finish#$"
 		sClose sock
 		print ("send:"++ show (sendNum))
+
+
 ------------------------------------------------------------------------
+
 
 
 ------------------------------------------------------------------------
 
 maintainEnv :: MVar String -> MVar Env ->IO ()
-maintainEnv m u = runListM (updateListLoop m u)
+maintainEnv m u = runTrackerM (updateListLoop m u)
 
-updateListLoop :: MVar String -> MVar Env -> ListM ()
+updateListLoop :: MVar String -> MVar Env -> TrackerM ()
 updateListLoop m u = do 
 			s <- doIO (takeMVar m)
 			x <- (updateList s u)
 			updateListLoop m u
 			
 
-updateList :: String ->MVar Env-> ListM ()
+updateList :: String ->MVar Env-> TrackerM ()
 updateList a mvarEnv = do 
 		x <- get
 		put (modifiedEnv x)
@@ -96,12 +99,12 @@ updateList a mvarEnv = do
 
 --ListM a = StateT [String] IO a	
 
-runListM :: ListM a -> IO a
-runListM l = evalStateT l emptyEnv
+runTrackerM :: TrackerM a -> IO a
+runTrackerM l = evalStateT l emptyEnv
 
-emptyEnv = Env {connectedPeers = [], files = ("Hey",["12","23"])}
+emptyEnv = Env {connectedPeers = [], files = [("Hey",["12","23"])]}
 
-doIO :: IO a-> ListM a
+doIO :: IO a-> TrackerM a
 doIO = lift 
 
 --printList :: ListM a -> IO (		)
