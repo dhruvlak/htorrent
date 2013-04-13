@@ -10,11 +10,15 @@ import Data.Map as M
 
 type TrackerM a = StateT Env IO a
 
-data Env = Env {
-		connectedPeers :: [String]
-		,files :: [(String,[String])]
+data Env = Env {files :: [FileInfo]
+		,connectedPeers :: [String]
+		
 		} deriving (Show)
 
+data FileInfo = FileInfo {
+	seeders :: [String]
+	,fName :: String
+} deriving (Show)
 
 getIpEth0 (n:ns) = if ((name n) == "en0")
                           then show (ipv4 n)
@@ -46,6 +50,7 @@ acceptLoop sock = do
 			mvarFile <- newEmptyMVar
 			mvarSeeder <- newEmptyMVar
 			mvarEnv <- newEmptyMVar
+
 			maintainEnvTid <- (forkIO (maintainEnv mvarFile mvarSeeder mvarEnv))
 			--checkPreetKhaliHit
 			listen sock 2
@@ -128,11 +133,11 @@ updateList fileName seeder mvarEnv = do
 		      modifiedEnv1 env fileName seeder = Env { connectedPeers = (addUnique seeder (connectedPeers env) ),files = (    files env )  }
 
 
-modifyFileList::[(String,[String])] -> String -> String -> [(String,[String])]
-modifyFileList (x:xs) fileName seeder = if (fst x) == fileName then
-						((fileName,(addUnique seeder (snd x))):xs)
+modifyFileList::[FileInfo] -> String -> String -> [FileInfo]
+modifyFileList (x:xs) fileName seeder = if (fName x) == fileName then
+						((FileInfo {fName = (fName x), seeders = (addUnique seeder (seeders x))}):xs)
 					else (x:(modifyFileList xs fileName seeder))
-modifyFileList [] fileName seeder = [(fileName,[seeder])]
+modifyFileList [] fileName seeder = [FileInfo {fName = fileName, seeders = [seeder]}]
 --ListM a = StateT [String] IO a	
 
 addUnique :: String ->[String] -> [String]
@@ -145,7 +150,7 @@ addUnique s [] = [s]
 runTrackerM :: TrackerM a -> IO a
 runTrackerM l = evalStateT l emptyEnv
 
-emptyEnv = Env {connectedPeers = [], files = [("Hey",["12","23"])]}
+emptyEnv = Env {connectedPeers = [], files = []}
 
 doIO :: IO a-> TrackerM a
 doIO = lift 
