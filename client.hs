@@ -3,7 +3,7 @@ import Network.Socket
 import Control.Concurrent
 import Control.Exception
 --import Network
-import System.IOi
+import System.IO
 import Control.Monad.State
 import Control.OldException
 
@@ -11,39 +11,51 @@ import Control.OldException
 data Env = Env {
 		files :: [FileInfo]
 		,seedingList :: [String]
-		,dowloadList :: [(String,String)]
-	} deriving (Show,Read)
+		,downloadList :: [(String,ThreadId)]
+	} deriving (Show)
 
 
 data FileInfo = FileInfo {
-	Seeders :: [String]
+	seeders :: [String]
 	,fName :: String
 }deriving (Show,Read)
 
 
 type ClientM a = StateT Env IO a
 
-emptyEnv = Env { files=[], seedingList = [] , dowloadList =[] }  
+emptyEnv = Env { files=[], seedingList = [] , downloadList =[] }  
 tracker_ip = "127.0.0.1"
 tracker_port = 10116
 
 main :: IO ()
 main = do
 	hSetBuffering stdout NoBuffering
-	evalStateT mainLoop emptyEnv
+	evalStateT (inputLoop True) emptyEnv
 
 doIO :: IO a -> ClientM a
 doIO = lift
+ 
 
-mainLoop :: ClientM ()
-mainLoop = do  
-	mvarSeedingList <- newEmptyMVar
+inputLoop :: Bool -> ClientM ()
+inputLoop seedingOrNot = do  
+	mvarSeedingList <- doIO newEmptyMVar
+	env1 <- get
+			
+	
+	if (seedingOrNot) then
+		do
+			doIO (print "i am seeding")
+			doIO (forkIO (seedingWorker mvarSeedingList (seedingList env1)))
+			--doIO (print "i am seeding")
+			return ()
+	else
+		return ()
+
 	s <- doIO  (do 
 			putStr "htorrent>"
 			getLine
 	       )
-	env1 <- get
-	doIO {forkIO (seedingWorker mvarSeedingList (seedingList env1))}
+
 	clientSock <- doIO (socket AF_INET Stream defaultProtocol)
 	
 	interpretResult <- doIO $ interpret s
@@ -53,70 +65,74 @@ mainLoop = do
 		if (interpretResult ==1 || interpretResult == 2)	then 
 			do
 				env <- get
-				x <- doIO (connectToTracker interpretResult env clientSock mvarSeedingList)
+				x <- doIO (connectToTracker interpretResult env clientSock mvarSeedingList) 
 				put x
-		else if (interpretResult ==3 )
-			downloadComputation env
+		else if (interpretResult ==3 ) then
+			do
+				env <- get
+				downloadComputation env
 		
 		else	
-		doIO $ putStrLn "we are working on this option"
+			doIO $ putStrLn "we are working on this option"
 	
 	newEnv <- get
 	doIO $ print ("current state:"++ (show newEnv))
-	mainLoop
+	inputLoop False
 
 
-downloadComputation :: ClientM()
-downloadComputation env =
+downloadComputation :: Env -> ClientM ()
+downloadComputation env = do
 		 fileName <- doIO ( do
 				putStr "enter file:" 
 				getLine
 				)
-		NewfileName <- doIO (do
+		 newfileName <- doIO (do
 				putStr "enter New File:"
 				getLine
 				)
-		 if (chechFileInEnv fileName env) then			 	
-			downloadThreadId <-doIO (dowloadWorker fileName (files env))
+		 if (checkFileInEnv fileName (files env)) then			 	
+			do
+			downloadThreadId <-doIO (forkIO (downloadWorker fileName (files env)))
 			put Env { files =files env, seedingList = seedingList env, downloadList = ((fileName,downloadThreadId):(downloadList env)) }
 		 else	
 			downloadComputation env		
 
-checkFIleInEnv :: String -> [FileInfo] -> Bool
-checkFileInEnv fileName  (x:xs) = if (fName x) == filename then
+checkFileInEnv :: String -> [FileInfo] -> Bool
+checkFileInEnv fileName  (x:xs) = if (fName x) == fileName then
 					True
 				  else checkFileInEnv fileName xs
 checkFileInEnv fileName xs = False
 
 downloadWorker :: String -> [FileInfo] -> IO ()
 downloadWorker fileName fileInfoList  = do 
-					seedersList <- fName_seeders fileName fileInfoList
-					if ( seedersList == [] ) then
+					seedersList <- (fName_seeders fileName fileInfoList)
+					if (seedersList == []) then
 						print "no Seeder"
 					else
-					
-					canDownload <- tryConnectToSeederList fileName seedersList
-					if canDownload then
-						print "downloaded : " ++ fileName
-					else
-						print "cannot connect to any seeder" 
+						do	
+						canDownload <- tryConnectToSeederList fileName seedersList
+						if canDownload then
+							print ("downloaded : " ++ fileName)
+						else
+							print "cannot connect to any seeder" 
 
-fName_seeders :: String -> [FileInfo] -> [String]
+fName_seeders :: String -> [FileInfo] -> IO [String]
 fName_seeders fileName (x:xs) = if (fileName == (fName x)) then
-					seeders x
+					return (seeders x)
 				else
 					fName_seeders fileName xs
-fName_seeder fileName [] = []
+fName_seeder fileName [] = return []
 
 tryConnectToSeederList :: String -> [String] -> IO Bool
 tryConnectToSeederList fileName (x:xs) = do
-					 downloadSock <- doIO (socket AF_INET Stream defaultProtocol)
-					 connectedOrNot <- try ( connect downloadSock (Sock) )
+					 downloadSock <- (socket AF_INET Stream defaultProtocol)
+					 seederAddr <- inet_addr x
+					 connectedOrNot <- Control.OldException.try ( connect downloadSock (SockAddrInet tracker_port seederAddr ))
 					 case connectedOrNot of
-					 Right a -> do
+					 	Right a -> do
 							send downloadSock fileName
 						    	s<-recv downloadSock 100
-							if (s == "yes")
+							if (s == "yes") then
 								do
 									putStrLn "s:yes"
 									return True
@@ -125,12 +141,12 @@ tryConnectToSeederList fileName (x:xs) = do
 									putStrLn "s:no"
 									return True
 
-					Left a -> tryConnectToSeederList fileName xs
+						Left a -> tryConnectToSeederList fileName xs
 tryConnectToSeederList fileName [] = return False
   
 	
 
-getIpEth0 (n:ns) = if ((name n) == "en0")
+getIpEth0 (n:ns) = if ((name n) == "e0")
                           then show (ipv4 n)
                           else getIpEth0 ns
 
@@ -139,33 +155,48 @@ getIpEth0 [] = "127.0.0.1"
 ipEth :: IO HostAddress
 ipEth = do
 	ni <- getNetworkInterfaces
-	putStrLn (getIpEth0 ni)
+	--putStrLn (getIpEth0 ni)
 	inet_addr (getIpEth0 ni)
 	
 
+seedingPort = 1729
 seedingWorker :: MVar [String]->[String] -> IO ()
-seedingWorker mvarSeedingList = do 
-					dowloadInProgress <- newEmptyMVar
-					seedingSock <- socket AF_INET Stream defaultProtocol
-					seederAddr <- ipEth
-					bindSocket seedingSock (SockAddrInet seedingPort seederAddr)
-					seedingAccepThreadId <- (forkIO (acceptSeeding seedingSock seedingFileList downloadInProgress))
+seedingWorker mvarSeedingList seedingFileList=do 
+				seedingSock <- socket AF_INET Stream defaultProtocol
+				seederAddr <- ipEth
+				bindSocket seedingSock (SockAddrInet seedingPort seederAddr)
+				seedingWorkerLoop seedingSock mvarSeedingList seedingFileList
+
+seedingWorkerLoop :: Socket -> MVar [String] -> [String]->IO ()
+seedingWorkerLoop seedingSock mvarSeedingList seedingFileList = do 
+					downloadInProgress <- newEmptyMVar
+					--seedingListFromMVar <- takeMVar mvarSeedingList
+					
+					seedingAcceptThreadId <- (forkIO (acceptSeeding seedingSock seedingFileList downloadInProgress))
 					seedingListFromMVar <- takeMVar mvarSeedingList
-					takeMVar dowloadInProgress
+					--takeMVar downloadInProgress
 					killThread seedingAcceptThreadId
-					seedingWorker mvarSeedingList seedingListFromMVar	
+					--sClose seedingSock
+					seedingWorkerLoop seedingSock mvarSeedingList seedingListFromMVar	
+					
 
 acceptSeeding :: Socket -> [String] -> MVar Bool ->IO ()
-acceptSeeding seedingSock seedingFileList dInProgress= listen seedingSock 1
+acceptSeeding seedingSock seedingFileList dInProgress = do 
+				listen seedingSock 1
 				acceptedSock <- accept seedingSock
-				fileNameFromCli <- (recv acceptedSock 100)
+				fileNameFromCli <- (recv (fst acceptedSock) 100)
 				if (elem fileNameFromCli seedingFileList ) then
-					send "yes" acceptedSock				
-
-					putMVar True dInProgress
+				   do	
+					send (fst acceptedSock) "yes"				
+					--putMVar dInProgress True
+					return ()
 				else 
-					send "No" acceptedSock
+				   do
+					send (fst acceptedSock) "no"
+					return ()
+
 				sClose seedingSock
+				acceptSeeding seedingSock seedingFileList dInProgress
 
 interpret :: String -> IO Int
 interpret s = if s == "connect" then
@@ -192,8 +223,10 @@ connectToTracker requestType env clientSock mvarSeedingList=
 		 do
 			trackerAddr <- inet_addr tracker_ip
 			connect clientSock (SockAddrInet tracker_port trackerAddr)
-			getEnv env clientSock ""
-			
+			env2 <- getEnv env clientSock ""
+			sClose clientSock
+			return env2
+
 		else if( requestType ==2) then
 		 do
 			trackerAddr <- inet_addr tracker_ip
@@ -201,7 +234,8 @@ connectToTracker requestType env clientSock mvarSeedingList=
 			fileName <- getLine
 			connect clientSock (SockAddrInet tracker_port trackerAddr)
 			updateTrackerEnv clientSock fileName 
-			putMVar (addUnique fileName (seedingList env)) mvarSeedingList
+			putMVar mvarSeedingList (addUnique fileName (seedingList env)) 
+			sClose clientSock
 			return Env {files =files env, seedingList = (addUnique fileName (seedingList env)), downloadList = (downloadList env)}
 			
 		      else
@@ -223,7 +257,7 @@ getEnvLoop env clientSock msgReceived = do
 						do
 							sClose clientSock
 							return Env{files = (read (msgReceived ++ (filter (\x -> x/='$') m)))
-								  , dowloadList = (dowloadList env)
+								  , downloadList = (downloadList env)
 								  , seedingList =(seedingList env)
 								  }
 
