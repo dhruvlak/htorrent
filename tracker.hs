@@ -66,7 +66,7 @@ worker serverSock (clientSock, (SockAddrInet pn ha) ) mvarFile mvarSeeder mvarEn
 		   do	
 			tryTakeMVar mvarEnv
 			putMVar mvarFile ("")
-			putMVar mvarSeeder ("")
+			putMVar mvarSeeder (clientIP)
 		--takeMVar u
 		--tryTakeMVar u
 			newEnv <- takeMVar mvarEnv
@@ -100,16 +100,32 @@ updateListLoop mvarFile mvarSeeder mvarEnv = do
 
 updateList :: String -> String ->MVar Env-> TrackerM ()
 updateList fileName seeder mvarEnv = do 
-		env <- get
-		put (modifiedEnv env fileName seeder)
-		doIO (print (modifiedEnv env fileName seeder))
-		doIO ( forkIO (do  v <- tryTakeMVar mvarEnv
-				   putMVar mvarEnv (modifiedEnv env fileName seeder)
-			      )
-		     )
-		return ()
+		if(fileName == "") then
+		     do
+			env <- get
+			put (modifiedEnv1 env fileName seeder)
+			doIO (print (modifiedEnv1 env fileName seeder))
+			doIO (
+				 forkIO (do  v <- tryTakeMVar mvarEnv
+                                             putMVar mvarEnv (modifiedEnv1 env fileName seeder)
+                                          )
+				)
+			return ()
+		
+		--where modifiedEnv env fileName seeder = Env { connectedPeers = (addUnique seeder (connectedPeers env) ),files = (files env) }
+		else
+		    do
+			env <- get
+			put (modifiedEnv env fileName seeder)
+			doIO (print (modifiedEnv env fileName seeder))
+			doIO ( forkIO (do  v <- tryTakeMVar mvarEnv
+					   putMVar mvarEnv (modifiedEnv env fileName seeder)
+			     		 )
+		     	     )
+			return ()
 		
 		where modifiedEnv env fileName seeder =  Env {connectedPeers = (connectedPeers env), files = (modifyFileList (files env) fileName seeder)} 
+		      modifiedEnv1 env fileName seeder = Env { connectedPeers = (addUnique seeder (connectedPeers env) ),files = (    files env )  }
 
 
 modifyFileList::[(String,[String])] -> String -> String -> [(String,[String])]
