@@ -29,7 +29,7 @@ tracker_port = 10116
 
 main :: IO ()
 main = do
-	hSetBuffering stdout NoBuffering
+ 	hSetBuffering stdout NoBuffering
 	evalStateT (inputLoop True) emptyEnv
 
 doIO :: IO a -> ClientM a
@@ -52,7 +52,7 @@ inputLoop seedingOrNot = do
 		return ()
 
 	s <- doIO  (do 
-			putStr "htorrent>"
+			--putStr "htorrent>"
 			getLine
 	       )
 
@@ -76,7 +76,7 @@ inputLoop seedingOrNot = do
 			doIO $ putStrLn "we are working on this option"
 	
 	newEnv <- get
-	doIO $ print ("current state:"++ (show newEnv))
+	--doIO $ print ("current state:"++ (show newEnv))
 	inputLoop False
 
 
@@ -86,16 +86,23 @@ downloadComputation env = do
 				putStr "enter file:" 
 				getLine
 				)
-		 newfileName <- doIO (do
+		 
+		 newFileName <- doIO (do
 				putStr "enter New File:"
 				getLine
 				)
-		 if (checkFileInEnv fileName (files env)) then			 	
-			do
-			downloadThreadId <-doIO (forkIO (downloadWorker fileName (files env)))
-			put Env { files =files env, seedingList = seedingList env, downloadList = ((fileName,downloadThreadId):(downloadList env)) }
-		 else	
-			downloadComputation env		
+		 checkNF <- try(openFile newFileName)
+		 case checkNF of
+		 Right a ->
+		 	if (checkFileInEnv fileName (files env)) then			 	
+				do
+				downloadThreadId <-doIO (forkIO (downloadWorker fileName (files env)))
+				put Env { files =files env, seedingList = seedingList env, downloadList = ((fileName,downloadThreadId):(downloadList env)) }
+		 	else	
+				doIO (print ("file not in Env" ++fileName))
+
+		Left a ->
+			putStrLn a
 
 checkFileInEnv :: String -> [FileInfo] -> Bool
 checkFileInEnv fileName  (x:xs) = if (fName x) == fileName then
@@ -110,7 +117,7 @@ downloadWorker fileName fileInfoList  = do
 						print "no Seeder"
 					else
 						do	
-						canDownload <- tryConnectToSeederList fileName seedersList
+						canDownload <- (tryConnectToSeederList fileName seedersList)
 						if canDownload then
 							print ("downloaded : " ++ fileName)
 						else
@@ -123,22 +130,26 @@ fName_seeders fileName (x:xs) = if (fileName == (fName x)) then
 					fName_seeders fileName xs
 fName_seeder fileName [] = return []
 
+
+
 tryConnectToSeederList :: String -> [String] -> IO Bool
 tryConnectToSeederList fileName (x:xs) = do
 					 downloadSock <- (socket AF_INET Stream defaultProtocol)
 					 seederAddr <- inet_addr x
-					 connectedOrNot <- Control.OldException.try ( connect downloadSock (SockAddrInet tracker_port seederAddr ))
+					 connectedOrNot <- Control.OldException.try ( connect downloadSock (SockAddrInet seedingPort seederAddr ))
 					 case connectedOrNot of
 					 	Right a -> do
+							--print "right"
 							send downloadSock fileName
-						    	s<-recv downloadSock 100
+						    	s<-(recv downloadSock 100)
+							print ("response : "++s)
 							if (s == "yes") then
 								do
-									putStrLn "s:yes"
+									--putStrLn "s:yes"
 									return True
 							else
 								do
-									putStrLn "s:no"
+									--putStrLn "s:no"
 									return True
 
 						Left a -> tryConnectToSeederList fileName xs
@@ -165,10 +176,12 @@ seedingWorker mvarSeedingList seedingFileList=do
 				seedingSock <- socket AF_INET Stream defaultProtocol
 				seederAddr <- ipEth
 				bindSocket seedingSock (SockAddrInet seedingPort seederAddr)
+				listen seedingSock 1
 				seedingWorkerLoop seedingSock mvarSeedingList seedingFileList
 
 seedingWorkerLoop :: Socket -> MVar [String] -> [String]->IO ()
 seedingWorkerLoop seedingSock mvarSeedingList seedingFileList = do 
+					
 					downloadInProgress <- newEmptyMVar
 					--seedingListFromMVar <- takeMVar mvarSeedingList
 					
@@ -177,25 +190,27 @@ seedingWorkerLoop seedingSock mvarSeedingList seedingFileList = do
 					--takeMVar downloadInProgress
 					killThread seedingAcceptThreadId
 					--sClose seedingSock
-					seedingWorkerLoop seedingSock mvarSeedingList seedingListFromMVar	
+					seedingWorkerLoop seedingSock mvarSeedingList seedingListFromMVar `Control.Exception.finally` (sClose seedingSock) 	
 					
-
+			
 acceptSeeding :: Socket -> [String] -> MVar Bool ->IO ()
 acceptSeeding seedingSock seedingFileList dInProgress = do 
-				listen seedingSock 1
+				
 				acceptedSock <- accept seedingSock
+				--print "accepted"
 				fileNameFromCli <- (recv (fst acceptedSock) 100)
 				if (elem fileNameFromCli seedingFileList ) then
 				   do	
 					send (fst acceptedSock) "yes"				
 					--putMVar dInProgress True
+					--print fileNameFromCli
 					return ()
 				else 
 				   do
 					send (fst acceptedSock) "no"
 					return ()
-
-				sClose seedingSock
+				sClose (fst acceptedSock)
+				--sClose seedingSock
 				acceptSeeding seedingSock seedingFileList dInProgress
 
 interpret :: String -> IO Int
