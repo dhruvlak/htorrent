@@ -5,6 +5,8 @@ import Control.Exception
 --import Network
 import System.IOi
 import Control.Monad.State
+import Control.OldException
+
 
 data Env = Env {
 		files :: [FileInfo]
@@ -15,7 +17,7 @@ data Env = Env {
 
 data FileInfo = FileInfo {
 	Seeders :: [String]
-	,Name :: String
+	,fName :: String
 }deriving (Show,Read)
 
 
@@ -40,7 +42,8 @@ mainLoop = do
 			putStr "htorrent>"
 			getLine
 	       )
-	doIO {forkIO (seedingWorker mvarSeedingList)}
+	env1 <- get
+	doIO {forkIO (seedingWorker mvarSeedingList (seedingList env1))}
 	clientSock <- doIO (socket AF_INET Stream defaultProtocol)
 	
 	interpretResult <- doIO $ interpret s
@@ -80,13 +83,50 @@ downloadComputation env =
 			downloadComputation env		
 
 checkFIleInEnv :: String -> [FileInfo] -> Bool
-checkFileInEnv fileName  (x:xs) = if (Name x) == filename then
+checkFileInEnv fileName  (x:xs) = if (fName x) == filename then
 					True
 				  else checkFileInEnv fileName xs
 checkFileInEnv fileName xs = False
 
 downloadWorker :: String -> [FileInfo] -> IO ()
-downloadWorker fileName fileInfoList  =i  
+downloadWorker fileName fileInfoList  = do 
+					seedersList <- fName_seeders fileName fileInfoList
+					if ( seedersList == [] ) then
+						print "no Seeder"
+					else
+					
+					canDownload <- tryConnectToSeederList fileName seedersList
+					if canDownload then
+						print "downloaded : " ++ fileName
+					else
+						print "cannot connect to any seeder" 
+
+fName_seeders :: String -> [FileInfo] -> [String]
+fName_seeders fileName (x:xs) = if (fileName == (fName x)) then
+					seeders x
+				else
+					fName_seeders fileName xs
+fName_seeder fileName [] = []
+
+tryConnectToSeederList :: String -> [String] -> IO Bool
+tryConnectToSeederList fileName (x:xs) = do
+					 downloadSock <- doIO (socket AF_INET Stream defaultProtocol)
+					 connectedOrNot <- try ( connect downloadSock (Sock) )
+					 case connectedOrNot of
+					 Right a -> do
+							send downloadSock fileName
+						    	s<-recv downloadSock 100
+							if (s == "yes")
+								do
+									putStrLn "s:yes"
+									return True
+							else
+								do
+									putStrLn "s:no"
+									return True
+
+					Left a -> tryConnectToSeederList fileName xs
+tryConnectToSeederList fileName [] = return False
   
 	
 
@@ -103,17 +143,28 @@ ipEth = do
 	inet_addr (getIpEth0 ni)
 	
 
-seedingWorker :: MVar [String] -> IO ()
+seedingWorker :: MVar [String]->[String] -> IO ()
 seedingWorker mvarSeedingList = do 
-					
+					dowloadInProgress <- newEmptyMVar
 					seedingSock <- socket AF_INET Stream defaultProtocol
 					seederAddr <- ipEth
 					bindSocket seedingSock (SockAddrInet seedingPort seederAddr)
-					seedingAccepThreadId <- (forkIO (acceptSeeding seedingSock seedingFileList)) `finally` sClose sock  
+					seedingAccepThreadId <- (forkIO (acceptSeeding seedingSock seedingFileList downloadInProgress))
+					seedingListFromMVar <- takeMVar mvarSeedingList
+					takeMVar dowloadInProgress
+					killThread seedingAcceptThreadId
+					seedingWorker mvarSeedingList seedingListFromMVar	
 
-acceptSeeding :: Socket -> [String] -> IO ()
-acceptSeeding seedingSock seedingFileList= listen seedingSock 1
+acceptSeeding :: Socket -> [String] -> MVar Bool ->IO ()
+acceptSeeding seedingSock seedingFileList dInProgress= listen seedingSock 1
 				acceptedSock <- accept seedingSock
+				fileNameFromCli <- (recv acceptedSock 100)
+				if (elem fileNameFromCli seedingFileList ) then
+					send "yes" acceptedSock				
+
+					putMVar True dInProgress
+				else 
+					send "No" acceptedSock
 				sClose seedingSock
 
 interpret :: String -> IO Int
