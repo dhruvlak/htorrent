@@ -15,7 +15,7 @@ How to run:
 	$cd htorrent
 	$cabal configure
 	$cabal build
-	$cabal install
+	$cabal install --prefix=$HOME --user
 
 Run tracker:
 	$htorrent –tracker
