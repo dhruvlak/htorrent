@@ -6,7 +6,7 @@ import Control.Exception
 import System.IO
 import Control.Monad.State
 
-import Data.Map as M
+--import Data.Map as M
 
 type TrackerM a = StateT Env IO a
 
@@ -20,7 +20,7 @@ data FileInfo = FileInfo {
 	,fName :: String
 } deriving (Show)
 
-getIpEth0 (n:ns) = if ((name n) == "en0")
+getIpEth0 (n:ns) = if ((name n) == "eth0")
                           then show (ipv4 n)
                           else getIpEth0 ns
 
@@ -67,7 +67,8 @@ worker serverSock (clientSock, (SockAddrInet pn ha) ) mvarFile mvarSeeder mvarEn
 		--print ha_1
 		requestType <- (recv clientSock 100)
 		--sClose sock
-		if (requestType == "$getEnv$") then
+		if (requestType == "$getEnv$") 
+		then
 		   do	
 			tryTakeMVar mvarEnv
 			putMVar mvarFile ("")
@@ -79,14 +80,23 @@ worker serverSock (clientSock, (SockAddrInet pn ha) ) mvarFile mvarSeeder mvarEn
 		--send sock "$#finish#$"
 			sClose clientSock
 			print ("send:"++ show (sendNum))
-		else 
-		  do
-			tryTakeMVar mvarEnv
-			putMVar mvarFile requestType
-			putMVar mvarSeeder clientIP
-			print ("updating:")
-			sClose clientSock
+		else if (requestType == "$close$") 
+		then
+			do
+				tryTakeMVar mvarEnv
+				putMVar mvarFile ("$")
+				putMVar mvarSeeder (clientIP)
 
+
+
+		else
+			  do
+				tryTakeMVar mvarEnv
+				putMVar mvarFile requestType
+				putMVar mvarSeeder clientIP
+				print ("updating:")
+				sClose clientSock
+	
 ------------------------------------------------------------------------
 
 
@@ -116,7 +126,18 @@ updateList fileName seeder mvarEnv = do
                                           )
 				)
 			return ()
-		
+		else if (fileName == "$" ) then
+			do
+				env <- get
+				put (modifiedEnv2 env fileName seeder)
+				doIO (print (modifiedEnv2 env fileName seeder))
+				doIO (
+						forkIO (do v<- tryTakeMVar mvarEnv
+							   putMVar mvarEnv (modifiedEnv2 env fileName seeder)
+							
+						       )
+     					)
+				return ()
 		--where modifiedEnv env fileName seeder = Env { connectedPeers = (addUnique seeder (connectedPeers env) ),files = (files env) }
 		else
 		    do
@@ -131,7 +152,14 @@ updateList fileName seeder mvarEnv = do
 		
 		where modifiedEnv env fileName seeder =  Env {connectedPeers = (connectedPeers env), files = (modifyFileList (files env) fileName seeder)} 
 		      modifiedEnv1 env fileName seeder = Env { connectedPeers = (addUnique seeder (connectedPeers env) ),files = (    files env )  }
+		      modifiedEnv2 env fileName seeder = Env { connectedPeers = (removeSeeder (connectedPeers env) seeder ),files = (removeSeederFromFiles (files env) seeder) }
 
+removeSeeder :: [String] -> String ->[String]
+removeSeeder cPeers seeder = filter (\s -> s/=seeder) cPeers
+
+removeSeederFromFiles :: [FileInfo]->String ->[FileInfo]
+removeSeederFromFiles (x:xs) seeder = ((FileInfo {fName = (fName x), seeders = (removeSeeder (seeders x) seeder)}):(removeSeederFromFiles xs seeder))
+removeSeederFromFiles [] seeder = []
 
 modifyFileList::[FileInfo] -> String -> String -> [FileInfo]
 modifyFileList (x:xs) fileName seeder = if (fName x) == fileName then

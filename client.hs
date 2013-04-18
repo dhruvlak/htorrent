@@ -2,11 +2,12 @@ import Network.Info
 import Network.Socket
 import Control.Concurrent
 import Control.Exception
---import Network
+import System.Environment
 import System.IO
 import Control.Monad.State
 import Control.OldException
-
+import Data.Maybe
+import System.Exit
 
 data Env = Env {
 		files :: [FileInfo]
@@ -29,7 +30,7 @@ tracker_port = 10116
 
 main :: IO ()
 main = do
- 	hSetBuffering stdout NoBuffering
+ 	hSetBuffering stdout (BlockBuffering (Just 4))
 	evalStateT (inputLoop True) emptyEnv
 
 doIO :: IO a -> ClientM a
@@ -40,19 +41,19 @@ inputLoop :: Bool -> ClientM ()
 inputLoop seedingOrNot = do  
 	mvarSeedingList <- doIO newEmptyMVar
 	env1 <- get
-			
+	seedingSock <-doIO( socket AF_INET Stream defaultProtocol)
 	
 	if (seedingOrNot) then
 		do
-			doIO (print "i am seeding")
-			doIO (forkIO (seedingWorker mvarSeedingList (seedingList env1)))
+			--doIO (print "i am seeding")
+			doIO (forkIO (seedingWorker mvarSeedingList (seedingList env1) seedingSock))
 			--doIO (print "i am seeding")
 			return ()
 	else
 		return ()
 
 	s <- doIO  (do 
-			--putStr "htorrent>"
+			putStr "htorrent>"
 			getLine
 	       )
 
@@ -62,19 +63,27 @@ inputLoop seedingOrNot = do
 	if (interpretResult == 0) then
 		doIO $ putStrLn "Unknown input"
 	else
-		if (interpretResult ==1 || interpretResult == 2)	then 
+		if (interpretResult ==1 || interpretResult == 2 )	then 
 			do
 				env <- get
 				x <- doIO (connectToTracker interpretResult env clientSock mvarSeedingList) 
 				put x
+		else if (interpretResult == 4)then 
+			do
+				env <- get
+                                x <- doIO (connectToTracker interpretResult env clientSock mvarSeedingList)
+                                doIO (sClose clientSock)
+				doIO (sClose seedingSock)
+				doIO (exitSuccess)
+						
 		else if (interpretResult ==3 ) then
 			do
 				env <- get
 				downloadComputation env
 		
-		else	
-			doIO $ putStrLn "we are working on this option"
-	
+			else
+				return ()
+		
 	newEnv <- get
 	--doIO $ print ("current state:"++ (show newEnv))
 	inputLoop False
@@ -104,6 +113,7 @@ downloadComputation env = do
 				do
 				doIO (hClose a)
 				doIO (print ("file not in Env" ++fileName))
+				--doIO (putStr "htorrent>")
 
 			Left a ->
 				doIO ( putStrLn (show a))
@@ -124,9 +134,13 @@ downloadWorker hand fileName fileInfoList  = do
 						do	
 						canDownload <- (tryConnectToSeederList fileName seedersList hand)
 						if canDownload then
-							print ("downloaded : " ++ fileName)
+							do 
+							putStrLn ("downloaded : " ++ fileName)
+							--putStr "htorrent>"
 						else
-							print "cannot connect to any seeder" 
+							do
+							print "cannot connect to any seeder"
+							--putStr "htorrent>" 
 					hClose hand
 
 fName_seeders :: String -> [FileInfo] -> IO [String]
@@ -157,7 +171,7 @@ tryConnectToSeederList fileName (x:xs) hand = do
 							else
 								do
 									--putStrLn "s:no"
-									return True
+									return False
 
 						Left a -> tryConnectToSeederList fileName xs hand
 tryConnectToSeederList fileName [] hand = return False
@@ -183,12 +197,11 @@ ipEth = do
 	
 
 seedingPort = 1729
-seedingWorker :: MVar [String]->[String] -> IO ()
-seedingWorker mvarSeedingList seedingFileList=do 
-				seedingSock <- socket AF_INET Stream defaultProtocol
+seedingWorker :: MVar [String] -> [String] -> Socket -> IO ()
+seedingWorker mvarSeedingList seedingFileList seedingSock =do 
 				seederAddr <- ipEth
 				bindSocket seedingSock (SockAddrInet seedingPort seederAddr)
-				listen seedingSock 1
+				listen seedingSock 5
 				seedingWorkerLoop seedingSock mvarSeedingList seedingFileList
 
 seedingWorkerLoop :: Socket -> MVar [String] -> [String]->IO ()
@@ -200,7 +213,7 @@ seedingWorkerLoop seedingSock mvarSeedingList seedingFileList = do
 					seedingAcceptThreadId <- (forkIO (acceptSeeding seedingSock seedingFileList downloadInProgress))
 					seedingListFromMVar <- takeMVar mvarSeedingList
 					--takeMVar downloadInProgress
-					killThread seedingAcceptThreadId
+					--killThread seedingAcceptThreadId
 					--sClose seedingSock
 					seedingWorkerLoop seedingSock mvarSeedingList seedingListFromMVar `Control.Exception.finally` (sClose seedingSock) 	
 					
@@ -255,11 +268,10 @@ interpret s = if s == "connect" then
 			  
 				else if s=="refresh" then
 					return 1
-				else
-			   	
-					do
-						putStrLn "Wrong Input" 
-						return 0
+					else if s=="close" then
+						return 4
+						else
+							return 0
 	
 connectToTracker::Int ->Env-> Socket -> MVar [String]->IO Env
 connectToTracker requestType env clientSock mvarSeedingList= 
@@ -268,7 +280,7 @@ connectToTracker requestType env clientSock mvarSeedingList=
 		 do
 			trackerAddr <- inet_addr tracker_ip
 			connect clientSock (SockAddrInet tracker_port trackerAddr)
-			env2 <- getEnv env clientSock ""
+			env2 <- getEnv_ env clientSock ""
 			sClose clientSock
 			return env2
 
@@ -289,11 +301,21 @@ connectToTracker requestType env clientSock mvarSeedingList=
 			 Left a -> do
 				putStrLn (show(a))
 				return env
-		      else
-				return env
-			
-getEnv :: Env -> Socket -> String -> IO Env
-getEnv env clientSock msgReceived =do
+		      	
+		else if (requestType == 4) then
+                  do
+                         trackerAddr <- inet_addr tracker_ip
+                         connect clientSock (SockAddrInet tracker_port trackerAddr)
+                         --env2 <- getEnv env clientSock ""
+			 sendTo clientSock "$close$" (SockAddrInet tracker_port trackerAddr)
+                         sClose clientSock
+                         return env
+
+		else
+			return env
+
+getEnv_ :: Env -> Socket -> String -> IO Env
+getEnv_ env clientSock msgReceived =do
 				trackerAddr <- inet_addr tracker_ip
  			        sendTo clientSock "$getEnv$" (SockAddrInet tracker_port trackerAddr) 
 				getEnvLoop  env clientSock msgReceived			
